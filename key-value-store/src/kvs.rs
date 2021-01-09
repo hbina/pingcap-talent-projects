@@ -2,43 +2,37 @@ pub struct KvStore {
     // TODO: To remove the size of this hashmap, you can calculate the size lazily
     index: std::collections::HashMap<String, (crate::utility::WriteCommand, u64)>,
     log_path: std::path::PathBuf,
-    writer: crate::utility::BufWriterWithPos<std::fs::File>,
+    log_writer: crate::utility::BufWriterWithPos<std::fs::File>,
     total_bytes: u64,
     wasted_bytes: u64,
 }
 
 impl KvStore {
     pub fn open(path: impl Into<std::path::PathBuf>) -> crate::utility::Result<KvStore> {
-        let path = path.into();
-        std::fs::create_dir_all(&path)?;
-        let files = crate::utility::sorted_log_files(&path)?;
+        let log_path = path.into();
+        std::fs::create_dir_all(&log_path)?;
+        let files = crate::utility::sorted_log_files(&log_path)?;
         let mut wasted_bytes = 0;
         let mut total_bytes = 0;
         let index = files
             .iter()
             .map(|file| crate::utility::parse_log_reader(file))
+            .collect::<crate::utility::Result<Vec<_>>>()?
+            .iter_mut()
             .fold(std::collections::HashMap::new(), |mut acc, i| {
-                match i {
-                    Ok(mut c) => c.drain().for_each(|(k, (command, size))| {
-                        total_bytes += size;
-                        if let Some((_, old_size)) = acc.insert(k, (command, size)) {
-                            wasted_bytes += old_size;
-                        }
-                    }),
-                    Err(error) => {
-                        panic!(
-                            "An error occured parsing the previous logs with error:{}",
-                            error
-                        )
+                i.drain().for_each(|(k, (command, size))| {
+                    total_bytes += size;
+                    if let Some((_, old_size)) = acc.insert(k, (command, size)) {
+                        wasted_bytes += old_size;
                     }
-                }
+                });
                 acc
             });
-        let writer = crate::utility::new_log_file(&path)?;
+        let log_writer = crate::utility::new_log_file(&log_path)?;
         Ok(KvStore {
             index,
-            log_path: path,
-            writer,
+            log_path,
+            log_writer,
             total_bytes,
             wasted_bytes,
         })
@@ -100,7 +94,7 @@ impl KvStore {
         for (command, _) in self.index.values() {
             crate::utility::write_command(&mut writer, command)?;
         }
-        self.writer = writer;
+        self.log_writer = writer;
         Ok(())
     }
 
@@ -109,7 +103,7 @@ impl KvStore {
         key: String,
         command: crate::utility::WriteCommand,
     ) -> crate::utility::Result<()> {
-        let size = crate::utility::write_command(&mut self.writer, &command)?;
+        let size = crate::utility::write_command(&mut self.log_writer, &command)?;
         if let Some((_, waste_bytes)) = self.index.insert(key, (command, size)) {
             self.update_wasted_bytes(waste_bytes);
         }
