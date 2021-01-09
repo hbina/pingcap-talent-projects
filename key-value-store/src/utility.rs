@@ -2,22 +2,23 @@ use serde::{Deserialize, Serialize};
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
-// key => file => offset
-pub type PointerMap = std::collections::HashMap<String, (std::path::PathBuf, u64, u64)>;
 
-pub fn parse_log_reader(path: &std::path::PathBuf) -> Result<PointerMap> {
+pub fn parse_log_reader(
+    path: &std::path::PathBuf,
+) -> Result<std::collections::HashMap<String, (WriteCommand, u64)>> {
     let mut reader = BufReaderWithPos::new(std::fs::OpenOptions::new().read(true).open(path)?)?;
-    let mut index = PointerMap::new();
+    let mut index = std::collections::HashMap::new();
     let mut pos = reader.seek(SeekFrom::Start(0))?;
     let mut stream = serde_json::Deserializer::from_reader(&mut reader).into_iter::<WriteCommand>();
     while let Some(command) = stream.next() {
         let new_pos = stream.byte_offset() as u64;
+        let offset_pos = new_pos - pos;
         match command? {
-            WriteCommand::Set(key, _) => {
-                index.insert(key, (path.clone(), pos, new_pos));
+            WriteCommand::Set(key, value) => {
+                index.insert(key.clone(), (WriteCommand::Set(key, value), offset_pos));
             }
             WriteCommand::Remove(key) => {
-                index.insert(key, (path.clone(), pos, new_pos));
+                index.insert(key.clone(), (WriteCommand::Remove(key), offset_pos));
             }
         };
         pos = new_pos;
@@ -141,3 +142,34 @@ impl std::fmt::Display for KvsCommandError {
 }
 
 impl std::error::Error for KvsCommandError {}
+
+pub fn new_log_file(
+    path: &std::path::Path,
+) -> crate::utility::Result<BufWriterWithPos<std::fs::File>> {
+    let path = path.join(format!(
+        "{}.{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)?
+            .as_micros(),
+        crate::utility::STORE_EXT
+    ));
+    Ok(crate::utility::BufWriterWithPos::new(
+        std::fs::OpenOptions::new()
+            .read(true)
+            .append(true)
+            .write(true)
+            .create(true)
+            .open(&path)?,
+    )?)
+}
+
+pub fn write_command<W: std::io::Write + std::io::Seek>(
+    writer: &mut crate::utility::BufWriterWithPos<W>,
+    command: &crate::utility::WriteCommand,
+) -> crate::utility::Result<u64> {
+    let begin_pos = writer.pos();
+    serde_json::to_writer(&mut *writer, &command)?;
+    std::io::Write::flush(&mut *writer)?;
+    let end_pos = writer.pos();
+    Ok(end_pos - begin_pos)
+}
