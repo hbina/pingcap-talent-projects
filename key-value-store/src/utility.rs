@@ -97,14 +97,17 @@ impl<W: Write + Seek> Seek for BufWriterWithPos<W> {
     }
 }
 
-/// Returns sorted generation numbers in the given directory.
-pub fn sorted_gen_list(path: &std::path::PathBuf) -> Result<Vec<std::path::PathBuf>> {
-    let mut gen_list = std::fs::read_dir(path)?
+pub fn log_files(path: &std::path::PathBuf) -> Result<Vec<std::path::PathBuf>> {
+    Ok(std::fs::read_dir(path)?
         .flat_map(|res| -> Result<_> { Ok(res?.path()) })
         .filter(|path| path.is_file() && path.extension() == Some(STORE_EXT.as_ref()))
-        .collect::<Vec<std::path::PathBuf>>();
-    gen_list.sort_unstable();
-    Ok(gen_list)
+        .collect::<Vec<std::path::PathBuf>>())
+}
+
+pub fn sorted_log_files(path: &std::path::PathBuf) -> Result<Vec<std::path::PathBuf>> {
+    let mut log_files = log_files(path)?;
+    log_files.sort_unstable();
+    Ok(log_files)
 }
 
 pub fn grab_log_files(path: &std::path::PathBuf) -> Result<Vec<std::path::PathBuf>> {
@@ -126,6 +129,7 @@ pub const STORE_EXT: &str = "kvslog";
 #[derive(Debug)]
 pub enum KvsCommandError {
     KeyNotFound,
+    // TODO: Deserialization/Serialization errors
 }
 
 impl std::fmt::Display for KvsCommandError {

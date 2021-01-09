@@ -1,28 +1,27 @@
-use crate::utility::{
-    parse_log_reader, sorted_gen_list, BufReaderWithPos, BufWriterWithPos, PointerMap, Result,
-    WriteCommand, STORE_EXT,
-};
-
 pub struct KvStore {
-    index: PointerMap,
+    index: crate::utility::PointerMap,
     path: std::path::PathBuf,
-    writer: BufWriterWithPos<std::fs::File>,
-    leftover: u64,
+    writer: crate::utility::BufWriterWithPos<std::fs::File>,
+    total_bytes: u64,
+    wasted_bytes: u64,
 }
 
 impl KvStore {
-    pub fn open(path: impl Into<std::path::PathBuf>) -> Result<KvStore> {
+    pub fn open(path: impl Into<std::path::PathBuf>) -> crate::utility::Result<KvStore> {
         let path = path.into();
         std::fs::create_dir_all(&path)?;
-        let files = sorted_gen_list(&path)?;
-        let mut leftover = 0;
-        let index = files.iter().map(|file| parse_log_reader(file)).fold(
-            std::collections::HashMap::new(),
-            |mut acc, i| {
+        let files = crate::utility::sorted_log_files(&path)?;
+        let mut wasted_bytes = 0;
+        let mut total_bytes = 0;
+        let index = files
+            .iter()
+            .map(|file| crate::utility::parse_log_reader(file))
+            .fold(std::collections::HashMap::new(), |mut acc, i| {
                 match i {
                     Ok(mut c) => c.drain().for_each(|(k, v)| {
+                        total_bytes += v.2 - v.1;
                         if let Some(left) = acc.insert(k, v) {
-                            leftover += left.2 - left.1;
+                            wasted_bytes += left.2 - left.1;
                         }
                     }),
                     Err(error) => {
@@ -33,16 +32,15 @@ impl KvStore {
                     }
                 }
                 acc
-            },
-        );
+            });
         let path = path.join(format!(
             "{}.{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::SystemTime::UNIX_EPOCH)?
                 .as_micros(),
-            STORE_EXT
+            crate::utility::STORE_EXT
         ));
-        let writer = BufWriterWithPos::new(
+        let writer = crate::utility::BufWriterWithPos::new(
             std::fs::OpenOptions::new()
                 .read(true)
                 .append(true)
@@ -54,31 +52,39 @@ impl KvStore {
             index,
             path,
             writer,
-            leftover,
+            total_bytes,
+            wasted_bytes,
         })
     }
 
-    pub fn set(&mut self, key: String, value: std::string::String) -> Result<()> {
-        self.write_log_to_file(key.clone(), &WriteCommand::Set(key.clone(), value.clone()))?;
+    pub fn set(&mut self, key: String, value: std::string::String) -> crate::utility::Result<()> {
+        self.write_log_to_file(
+            key.clone(),
+            &crate::utility::WriteCommand::Set(key.clone(), value.clone()),
+        )?;
+        if self.waste_ratio() > 0.25f64 {
+            self.do_compaction()?;
+        }
         Ok(())
     }
 
-    pub fn get(&self, key: String) -> Result<Option<String>> {
+    pub fn get(&self, key: String) -> crate::utility::Result<Option<String>> {
         if let Some((log_file, begin, end)) = self.index.get(&key) {
-            let mut reader =
-                BufReaderWithPos::new(std::fs::OpenOptions::new().read(true).open(&log_file)?)?;
+            let mut reader = crate::utility::BufReaderWithPos::new(
+                std::fs::OpenOptions::new().read(true).open(&log_file)?,
+            )?;
             std::io::Seek::seek(&mut reader, std::io::SeekFrom::Start(*begin))?;
             if let Some(command) = serde_json::Deserializer::from_reader(&mut reader)
-                .into_iter::<WriteCommand>()
+                .into_iter::<crate::utility::WriteCommand>()
                 .next()
             {
                 match command? {
-                    WriteCommand::Set(old_key, value) => {
+                    crate::utility::WriteCommand::Set(old_key, value) => {
                         assert_eq!(old_key, key);
                         println!("{}", value);
                         Ok(Some(value))
                     }
-                    WriteCommand::Remove(old_key) => {
+                    crate::utility::WriteCommand::Remove(old_key) => {
                         assert_eq!(old_key, key);
                         println!("Key not found");
                         Ok(None)
@@ -96,25 +102,33 @@ impl KvStore {
         }
     }
 
-    pub fn remove(&mut self, key: String) -> Result<()> {
-        if let Some((log_file, begin, _)) = self.index.get(&key) {
-            let mut reader =
-                BufReaderWithPos::new(std::fs::OpenOptions::new().read(true).open(&log_file)?)?;
+    pub fn remove(&mut self, key: String) -> crate::utility::Result<()> {
+        if let Some((log_file, begin, end)) = self.index.get(&key) {
+            let mut reader = crate::utility::BufReaderWithPos::new(
+                std::fs::OpenOptions::new().read(true).open(&log_file)?,
+            )?;
             std::io::Seek::seek(&mut reader, std::io::SeekFrom::Start(*begin))?;
             if let Some(command) = serde_json::Deserializer::from_reader(&mut reader)
-                .into_iter::<WriteCommand>()
+                .into_iter::<crate::utility::WriteCommand>()
                 .next()
             {
                 match command? {
-                    WriteCommand::Set(old_key, _) => {
+                    crate::utility::WriteCommand::Set(old_key, _) => {
                         assert_eq!(key, old_key);
-                        self.write_log_to_file(key.clone(), &WriteCommand::Remove(key.clone()))?;
+                        self.write_log_to_file(
+                            key.clone(),
+                            &crate::utility::WriteCommand::Remove(key.clone()),
+                        )?;
                     }
-                    WriteCommand::Remove(old_key) => {
+                    crate::utility::WriteCommand::Remove(old_key) => {
                         assert_eq!(key, old_key);
-                        panic!("Already deleted the key{}", old_key);
                     }
                 }
+            } else {
+                panic!(
+                    r#"Unable to deserialize the command from log {:?} at (begin, end) offset at ({}, {})"#,
+                    log_file, begin, end
+                );
             }
             Ok(())
         } else {
@@ -123,7 +137,31 @@ impl KvStore {
         }
     }
 
-    fn write_log_to_file(&mut self, key: String, command: &WriteCommand) -> Result<()> {
+    fn waste_ratio(&self) -> f64 {
+        self.wasted_bytes as f64 / self.total_bytes as f64
+    }
+
+    fn do_compaction(&mut self) -> crate::utility::Result<()> {
+        println!("doing compaction...");
+        Ok(())
+    }
+
+    fn clear_log_file(&self) -> crate::utility::Result<()> {
+        for f in crate::utility::log_files(&self.path)? {
+            std::fs::remove_file(f)?;
+        }
+        Ok(())
+    }
+
+    fn dump_log_file(&self) -> crate::utility::Result<()> {
+        Ok(())
+    }
+
+    fn write_log_to_file(
+        &mut self,
+        key: String,
+        command: &crate::utility::WriteCommand,
+    ) -> crate::utility::Result<()> {
         let current_pos = self.writer.pos();
         serde_json::to_writer(&mut self.writer, &command)?;
         std::io::Write::flush(&mut self.writer)?;
@@ -131,12 +169,13 @@ impl KvStore {
             .index
             .insert(key, (self.path.clone(), current_pos, self.writer.pos()))
         {
-            self.update_left_over(end - begin);
+            self.update_wasted_bytes(end - begin);
         }
         Ok(())
     }
 
-    fn update_left_over(&mut self, key: u64) {
-        self.leftover += key;
+    fn update_wasted_bytes(&mut self, command_size: u64) {
+        println!("wasted_space:{}", self.wasted_bytes);
+        self.wasted_bytes += command_size;
     }
 }
