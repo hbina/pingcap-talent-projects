@@ -1,2 +1,7 @@
+mod buffer;
+pub mod enums;
+pub mod errors;
 pub mod kvs;
-pub mod utility;
+pub mod traits;
+pub mod types;
+mod utilities;
