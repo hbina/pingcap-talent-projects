@@ -226,7 +226,6 @@ fn cli_access_server(engine: &str, addr: &str) {
         child.kill().expect("server exited before killed");
     });
     thread::sleep(Duration::from_secs(1));
-
     Command::cargo_bin("kvs-client")
         .unwrap()
         .args(&["set", "key1", "value1", "--addr", addr])

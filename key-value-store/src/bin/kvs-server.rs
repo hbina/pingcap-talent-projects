@@ -1,6 +1,8 @@
 extern crate clap;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::init();
+    std::env::vars().for_each(|(key, value)| log::info!("{} => {}", key, value));
     let matches = clap::App::new(clap::crate_name!())
         .version(clap::crate_version!())
         .author(clap::crate_authors!())
@@ -36,38 +38,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap();
     let engine = matches.value_of("engine").unwrap();
     let addr = matches.value_of("addr").unwrap();
+    log::info!("Connecting to {} engine at {}", engine, addr);
     let listener = std::net::TcpListener::bind(addr)?;
-    let mut keystore = kvs::kvs::KvStore::open(log_path)?;
-    let mut buffer = String::new();
-    println!("Started kvs with engine:{}", engine);
+    let keystore = std::sync::Arc::new(std::sync::Mutex::new(kvs::kvs::KvStore::open(log_path)?));
     for stream in listener.incoming() {
         let mut stream = stream.unwrap();
-        std::io::Read::read_to_string(&mut stream, &mut buffer)?;
-        if let Some(command) = parse_command(buffer.trim_end()) {
-            println!(
-                "{}",
-                match command {
-                    kvs::enums::KvsCommand::Set(key, value) => {
-                        keystore.set(key.into(), value.into())?;
-                        format!("Associated the key:'{}' with value:'{}'", key, value)
-                    }
-                    kvs::enums::KvsCommand::Get(key) => {
-                        if let Some(result) = keystore.get(key.into())? {
-                            format!("Retrieved value:'{}' from key:'{}'", result, key)
-                        } else {
-                            format!("There are no value associated with key:'{}'", key)
-                        }
-                    }
-                    kvs::enums::KvsCommand::Remove(key) => {
-                        keystore.remove(key.into())?;
-                        format!("Removed value with key:'{}'", key)
-                    }
-                }
-            );
-        } else {
-            println!("error parsing input");
-        };
-        buffer.clear();
+        let keystore = keystore.clone();
+        std::thread::spawn(move || {
+            let mut ks = keystore.lock().unwrap();
+            let mut deserializer =
+                serde_json::Deserializer::from_reader(&mut stream).into_iter::<String>();
+            if let Some(command) = deserializer.next() {
+                let buffer = command.unwrap();
+                let result = execute_command(&mut *ks, buffer.as_str()).unwrap();
+                serde_json::to_writer(&mut stream, &result).unwrap();
+                std::io::Write::flush(&mut stream).unwrap();
+            }
+        });
     }
     Ok(())
 }
@@ -96,4 +83,30 @@ fn parse_command(string: &str) -> Option<kvs::enums::KvsCommand> {
         },
         _ => None,
     }
+}
+
+fn execute_command(
+    keystore: &mut kvs::kvs::KvStore,
+    buffer: &str,
+) -> kvs::types::Result<Option<String>> {
+    if let Some(command) = parse_command(buffer.trim_end()) {
+        match command {
+            kvs::enums::KvsCommand::Set(key, value) => {
+                keystore.set(key.into(), value.into())?;
+            }
+            kvs::enums::KvsCommand::Get(key) => {
+                if let Some(value) = keystore.get(key.into())? {
+                    return Ok(Some(format!("{}", value)));
+                } else {
+                    return Ok(Some(format!("Key not found")));
+                }
+            }
+            kvs::enums::KvsCommand::Remove(key) => {
+                if let Err(_) = keystore.remove(key.into()) {
+                    return Ok(Some(format!("Key not found")));
+                }
+            }
+        }
+    }
+    Ok(None)
 }
