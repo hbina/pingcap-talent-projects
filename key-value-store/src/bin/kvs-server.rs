@@ -1,6 +1,7 @@
 extern crate clap;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    dotenv::dotenv().ok();
     env_logger::init();
     std::env::vars().for_each(|(key, value)| log::info!("{} => {}", key, value));
     let matches = clap::App::new(clap::crate_name!())
