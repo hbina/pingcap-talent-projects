@@ -12,3 +12,11 @@ pub enum KvsCommand<'a> {
     Get(&'a str),
     Remove(&'a str),
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum KvsResponse {
+    Success,
+    NotFound,
+    BadNotFound,
+    Message(String),
+}

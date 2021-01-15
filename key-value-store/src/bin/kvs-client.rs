@@ -147,9 +147,21 @@ fn send_command(string: &String, addr: &str) -> kvs::types::Result<()> {
     serde_json::to_writer(&mut stream, &string)?;
     std::io::Write::flush(&mut stream)?;
     let mut stream =
-        serde_json::Deserializer::from_reader(&mut stream).into_iter::<Option<String>>();
-    if let Some(Ok(Some(response))) = stream.next() {
-        println!("{}", response);
+        serde_json::Deserializer::from_reader(&mut stream).into_iter::<kvs::enums::KvsResponse>();
+    if let Some(res) = stream.next() {
+        let ee: kvs::enums::KvsResponse = res?;
+        match ee {
+            kvs::enums::KvsResponse::Success => {}
+            kvs::enums::KvsResponse::Message(s) => {
+                println!("{}", s)
+            }
+            kvs::enums::KvsResponse::NotFound => {
+                println!("Key not found")
+            }
+            kvs::enums::KvsResponse::BadNotFound => {
+                panic!("Key not found")
+            }
+        }
     }
     Ok(())
 }

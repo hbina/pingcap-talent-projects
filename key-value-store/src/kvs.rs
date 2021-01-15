@@ -62,7 +62,7 @@ impl KvStore {
             self.insert_command(key.clone(), crate::enums::WriteCommand::Remove(key.clone()))?;
             Ok(())
         } else {
-            Err(Box::new(crate::errors::KvsCommandError::KeyNotFound))
+            Err(Box::new(crate::errors::KvsNotFound))
         }
     }
 

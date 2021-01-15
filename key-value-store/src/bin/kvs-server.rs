@@ -1,3 +1,5 @@
+use std::unimplemented;
+
 extern crate clap;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -43,7 +45,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = std::net::TcpListener::bind(addr)?;
     let keystore = std::sync::Arc::new(std::sync::Mutex::new(kvs::kvs::KvStore::open(log_path)?));
     for stream in listener.incoming() {
-        let mut stream = stream.unwrap();
+        let mut stream = stream?;
         let keystore = keystore.clone();
         std::thread::spawn(move || {
             let mut ks = keystore.lock().unwrap();
@@ -89,25 +91,25 @@ fn parse_command(string: &str) -> Option<kvs::enums::KvsCommand> {
 fn execute_command(
     keystore: &mut kvs::kvs::KvStore,
     buffer: &str,
-) -> kvs::types::Result<Option<String>> {
+) -> kvs::types::Result<kvs::enums::KvsResponse> {
     if let Some(command) = parse_command(buffer.trim_end()) {
         match command {
             kvs::enums::KvsCommand::Set(key, value) => {
                 keystore.set(key.into(), value.into())?;
             }
             kvs::enums::KvsCommand::Get(key) => {
-                if let Some(value) = keystore.get(key.into())? {
-                    return Ok(Some(format!("{}", value)));
-                } else {
-                    return Ok(Some(format!("Key not found")));
-                }
+                let result = keystore.get(key.into())?;
+                return match result {
+                    Some(s) => Ok(kvs::enums::KvsResponse::Message(s)),
+                    None => Ok(kvs::enums::KvsResponse::NotFound),
+                };
             }
             kvs::enums::KvsCommand::Remove(key) => {
                 if let Err(_) = keystore.remove(key.into()) {
-                    return Ok(Some(format!("Key not found")));
+                    return Ok(kvs::enums::KvsResponse::BadNotFound);
                 }
             }
         }
     }
-    Ok(None)
+    Ok(kvs::enums::KvsResponse::Success)
 }
