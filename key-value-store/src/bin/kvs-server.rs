@@ -1,4 +1,4 @@
-use std::unimplemented;
+use std::{convert::TryFrom, unimplemented};
 
 extern crate clap;
 
@@ -41,9 +41,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap();
     let engine = matches.value_of("engine").unwrap();
     let addr = matches.value_of("addr").unwrap();
+    let engine_type = kvs::enums::KvsEngineType::try_from(engine)?;
     log::info!("Connecting to {} engine at {}", engine, addr);
     let listener = std::net::TcpListener::bind(addr)?;
-    let keystore = std::sync::Arc::new(std::sync::Mutex::new(kvs::kvs::KvStore::open(log_path)?));
+    let keystore: std::sync::Arc<std::sync::Mutex<Box<dyn kvs::traits::KvsEngine + Send>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(match engine_type {
+            kvs::enums::KvsEngineType::KvStore => Box::new(kvs::kvs::KvStore::open(log_path)?),
+            kvs::enums::KvsEngineType::Sled => {
+                unimplemented!()
+            }
+        }));
     for stream in listener.incoming() {
         let mut stream = stream?;
         let keystore = keystore.clone();
@@ -53,7 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 serde_json::Deserializer::from_reader(&mut stream).into_iter::<String>();
             if let Some(command) = deserializer.next() {
                 let buffer = command.unwrap();
-                let result = execute_command(&mut *ks, buffer.as_str()).unwrap();
+                let result = execute_command(&mut **ks, buffer.as_str()).unwrap();
                 serde_json::to_writer(&mut stream, &result).unwrap();
                 std::io::Write::flush(&mut stream).unwrap();
             }
@@ -89,7 +96,7 @@ fn parse_command(string: &str) -> Option<kvs::enums::KvsCommand> {
 }
 
 fn execute_command(
-    keystore: &mut kvs::kvs::KvStore,
+    keystore: &mut dyn kvs::traits::KvsEngine,
     buffer: &str,
 ) -> kvs::types::Result<kvs::enums::KvsResponse> {
     if let Some(command) = parse_command(buffer.trim_end()) {

@@ -38,34 +38,6 @@ impl KvStore {
         })
     }
 
-    pub fn set(&mut self, key: String, value: std::string::String) -> crate::types::Result<()> {
-        self.insert_command(
-            key.clone(),
-            crate::enums::WriteCommand::Set(key.clone(), value.clone()),
-        )?;
-        if self.waste_ratio() > 0.25f64 {
-            self.do_compaction()?;
-        }
-        Ok(())
-    }
-
-    pub fn get(&self, key: String) -> crate::types::Result<Option<String>> {
-        if let Some((crate::enums::WriteCommand::Set(_, value), _)) = self.index.get(&key) {
-            Ok(Some(String::from(value)))
-        } else {
-            Ok(None)
-        }
-    }
-
-    pub fn remove(&mut self, key: String) -> crate::types::Result<()> {
-        if let Some((crate::enums::WriteCommand::Set(_, _), _)) = self.index.get(&key) {
-            self.insert_command(key.clone(), crate::enums::WriteCommand::Remove(key.clone()))?;
-            Ok(())
-        } else {
-            Err(Box::new(crate::errors::KvsNotFound))
-        }
-    }
-
     fn waste_ratio(&self) -> f64 {
         self.wasted_bytes as f64 / self.total_bytes as f64
     }
@@ -106,5 +78,35 @@ impl KvStore {
 
     fn update_wasted_bytes(&mut self, command_size: u64) {
         self.wasted_bytes += command_size;
+    }
+}
+
+impl crate::traits::KvsEngine for KvStore {
+    fn set(&mut self, key: String, value: std::string::String) -> crate::types::Result<()> {
+        self.insert_command(
+            key.clone(),
+            crate::enums::WriteCommand::Set(key.clone(), value.clone()),
+        )?;
+        if self.waste_ratio() > 0.25f64 {
+            self.do_compaction()?;
+        }
+        Ok(())
+    }
+
+    fn get(&self, key: String) -> crate::types::Result<Option<String>> {
+        if let Some((crate::enums::WriteCommand::Set(_, value), _)) = self.index.get(&key) {
+            Ok(Some(String::from(value)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn remove(&mut self, key: String) -> crate::types::Result<()> {
+        if let Some((crate::enums::WriteCommand::Set(_, _), _)) = self.index.get(&key) {
+            self.insert_command(key.clone(), crate::enums::WriteCommand::Remove(key.clone()))?;
+            Ok(())
+        } else {
+            Err(Box::new(crate::errors::KvsNotFound))
+        }
     }
 }
