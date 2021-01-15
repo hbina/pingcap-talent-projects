@@ -1,3 +1,5 @@
+use crate::utilities::KVS_EXT;
+
 pub struct KvStore {
     // TODO: To remove the size of this hashmap, you can calculate the size lazily
     index: std::collections::HashMap<String, (crate::enums::WriteCommand, u64)>,
@@ -11,7 +13,14 @@ impl KvStore {
     pub fn open(path: impl Into<std::path::PathBuf>) -> crate::types::Result<KvStore> {
         let log_path = path.into();
         std::fs::create_dir_all(&log_path)?;
-        let files = crate::utilities::sorted_log_files(&log_path)?;
+        let sled_logs = crate::utilities::sled_log_files_exist(&log_path)?;
+        if sled_logs {
+            return Err(Box::new(crate::errors::MismatchEngine(
+                KVS_EXT.into(),
+                vec![],
+            )));
+        }
+        let files = crate::utilities::get_sorted_kvs_log_files(&log_path)?;
         let mut wasted_bytes = 0;
         let mut total_bytes = 0;
         let index = files
@@ -28,7 +37,7 @@ impl KvStore {
                 });
                 acc
             });
-        let log_writer = crate::utilities::new_log_file(&log_path)?;
+        let log_writer = crate::utilities::new_kvs_log_file(&log_path)?;
         Ok(KvStore {
             index,
             log_path,
@@ -49,14 +58,14 @@ impl KvStore {
     }
 
     fn clear_log_file(&mut self) -> crate::types::Result<()> {
-        for f in crate::utilities::log_files(&self.log_path)? {
+        for f in crate::utilities::get_log_files(crate::utilities::KVS_EXT, &self.log_path)? {
             std::fs::remove_file(f)?;
         }
         Ok(())
     }
 
     fn dump_log_file(&mut self) -> crate::types::Result<()> {
-        let mut writer = crate::utilities::new_log_file(&self.log_path)?;
+        let mut writer = crate::utilities::new_kvs_log_file(&self.log_path)?;
         for (command, _) in self.index.values() {
             crate::utilities::write_command(&mut writer, command)?;
         }

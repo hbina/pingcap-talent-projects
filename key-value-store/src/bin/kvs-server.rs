@@ -1,5 +1,3 @@
-use std::{convert::TryFrom, unimplemented};
-
 extern crate clap;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -35,21 +33,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .default_value("."),
         )
         .get_matches();
-    let log_path = matches
-        .value_of("log-path")
-        .map(|p| std::path::PathBuf::from(p))
-        .unwrap();
     let engine = matches.value_of("engine").unwrap();
     let addr = matches.value_of("addr").unwrap();
-    let engine_type = kvs::enums::KvsEngineType::try_from(engine)?;
-    log::info!("Connecting to {} engine at {}", engine, addr);
+    let engine_type = std::convert::TryFrom::try_from(engine)?;
+    let log_path = matches.value_of("log-path").unwrap();
+    log::info!(
+        "Connecting to {} engine at {} at path:{:?}",
+        engine,
+        addr,
+        log_path
+    );
     let listener = std::net::TcpListener::bind(addr)?;
     let keystore: std::sync::Arc<std::sync::Mutex<Box<dyn kvs::traits::KvsEngine + Send>>> =
         std::sync::Arc::new(std::sync::Mutex::new(match engine_type {
             kvs::enums::KvsEngineType::KvStore => Box::new(kvs::kvs::KvStore::open(log_path)?),
-            kvs::enums::KvsEngineType::Sled => {
-                unimplemented!()
-            }
+            kvs::enums::KvsEngineType::Sled => Box::new(kvs::sled::SledStore::open(log_path)?),
         }));
     for stream in listener.incoming() {
         let mut stream = stream?;

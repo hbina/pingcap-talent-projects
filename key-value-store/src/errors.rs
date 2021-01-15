@@ -19,3 +19,18 @@ impl std::fmt::Display for InvalidEngine {
 }
 
 impl std::error::Error for InvalidEngine {}
+
+#[derive(Debug)]
+pub struct MismatchEngine(pub String, pub Vec<std::path::PathBuf>);
+
+impl std::fmt::Display for MismatchEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "The following files {:?} does not match the requested engine {}",
+            self.1, self.0
+        )
+    }
+}
+
+impl std::error::Error for MismatchEngine {}

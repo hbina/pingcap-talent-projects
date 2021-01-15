@@ -29,33 +29,55 @@ pub fn parse_log_reader(
     Ok(index)
 }
 
-pub fn log_files(path: &std::path::PathBuf) -> crate::types::Result<Vec<std::path::PathBuf>> {
+pub fn get_log_files(
+    extension: &str,
+    path: &std::path::PathBuf,
+) -> crate::types::Result<Vec<std::path::PathBuf>> {
     Ok(std::fs::read_dir(path)?
         .flat_map(|res| -> crate::types::Result<_> { Ok(res?.path()) })
-        .filter(|path| path.is_file() && path.extension() == Some(STORE_EXT.as_ref()))
+        .filter(|path| path.is_file() && path.extension() == Some(extension.as_ref()))
         .collect::<Vec<std::path::PathBuf>>())
 }
 
-pub fn sorted_log_files(
+pub fn get_sorted_kvs_log_files(
     path: &std::path::PathBuf,
 ) -> crate::types::Result<Vec<std::path::PathBuf>> {
-    let mut log_files = log_files(path)?;
+    let mut log_files = get_log_files(KVS_EXT, path)?;
     log_files.sort_unstable();
     Ok(log_files)
 }
 
-pub const STORE_EXT: &str = "kvslog";
+pub fn sled_log_files_exist(path: &std::path::PathBuf) -> crate::types::Result<bool> {
+    Ok(get_log_files(SLED_EXT, path)?
+        .iter()
+        .any(|x| check_pathbuf_is_not(x, "conf"))
+        && get_log_files(SLED_EXT, path)?
+            .iter()
+            .any(|x| check_pathbuf_is_not(x, "db")))
+}
 
-pub fn new_log_file(
-    path: &std::path::Path,
-) -> crate::types::Result<crate::buffer::BufWriterWithPos<std::fs::File>> {
-    let path = path.join(format!(
+fn check_pathbuf_is_not(path: &std::path::PathBuf, is_not: &str) -> bool {
+    path.file_name()
+        .map_or(false, |x| x == &std::path::PathBuf::from(is_not))
+}
+
+pub const KVS_EXT: &str = "kvs";
+pub const SLED_EXT: &str = "sled";
+
+pub fn get_log_name(extension: &str) -> crate::types::Result<String> {
+    Ok(format!(
         "{}.{}",
         std::time::SystemTime::now()
             .duration_since(std::time::SystemTime::UNIX_EPOCH)?
             .as_micros(),
-        crate::utilities::STORE_EXT
-    ));
+        extension
+    ))
+}
+
+pub fn new_kvs_log_file(
+    path: &std::path::Path,
+) -> crate::types::Result<crate::buffer::BufWriterWithPos<std::fs::File>> {
+    let path = path.join(get_log_name(KVS_EXT)?);
     Ok(crate::buffer::BufWriterWithPos::new(
         std::fs::OpenOptions::new()
             .read(true)
